@@ -1,26 +1,26 @@
 import os
+
 import pandas as pd
 from flask import request, send_file
 from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Side, Border
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
-from convert.converter.model import Member, Attendance, Score, CommonClassInfo
 
 
 def format_excel_file(file_path):
     wb = load_workbook(file_path)
-    sheet = wb.active
-    for column in sheet.columns:
-        max_length = max((len(str(cell.value)) for cell in column if cell.value), default=0)
-        sheet.column_dimensions[get_column_letter(column[0].column)].width = max_length + 2
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        for column in ws.columns:
+            max_length = max((len(str(cell.value)) for cell in column if cell.value), default=0)
+            ws.column_dimensions[get_column_letter(column[0].column)].width = max_length + 2
     wb.save(file_path)
 
 
-def create_template_excel(file_path, class_code, class_name, common_class_info):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = f'{class_code}'
+def create_template_excel(wb, class_code, class_name, common_class_info):
+    sheet_name = common_class_info["subjectCode"] + " - " + class_code
+    ws = wb.create_sheet(title=sheet_name)
 
     ws.merge_cells('A1:G1')
     ws['A1'] = "DANH SÁCH SINH VIÊN NỢ MÔN"
@@ -28,7 +28,8 @@ def create_template_excel(file_path, class_code, class_name, common_class_info):
     ws['A1'].font = Font(size=16, bold=True)
 
     ws.merge_cells('A2:G2')
-    ws['A2'] = f'(Môn: {common_class_info.subjectCode} - {common_class_info.subjectName} - {class_code} - {class_name})'
+    ws[
+        'A2'] = f'(Môn: {common_class_info["subjectCode"]} - {common_class_info["subjectName"]} - {class_code} - {class_name})'
     ws['A2'].alignment = Alignment(horizontal="center")
     ws['A2'].fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
 
@@ -37,8 +38,6 @@ def create_template_excel(file_path, class_code, class_name, common_class_info):
         cell = ws.cell(row=4, column=col_num, value=header)
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
-
-    wb.save(file_path)
 
 
 def adjust_column_width(ws):
@@ -63,63 +62,70 @@ def add_border(ws, cell_range):
 def do_converter():
     try:
         data = request.get_json()
-        if not data:
+        if not data or 'classData' not in data:
             return {'message': 'No data provided'}, 400
-
-        members = [Member(**member) for member in data['memberData']]
-        scores = [Score(**score) for score in data['scoreData']]
-        common_class_info = CommonClassInfo(**data['commonClassInfo'])
-
-        members_df = pd.DataFrame([vars(member) for member in members])
-        scores_df = pd.DataFrame([vars(score) for score in scores])
-
-        if members_df.empty or scores_df.empty:
-            return {'message': 'No member data or score data available'}, 400
 
         output_dir = os.path.join(os.getcwd(), 'output')
         os.makedirs(output_dir, exist_ok=True)
         local_file_path = os.path.join(output_dir, 'output.xlsx')
 
-        create_template_excel(
-            file_path=local_file_path,
-            class_code=members_df['classCode'].iloc[0],
-            class_name=members_df['className'].iloc[0],
-            common_class_info=common_class_info
-        )
+        wb = Workbook()
 
-        wb = load_workbook(local_file_path)
-        ws = wb.active
+        for class_info in data['classData']:
+            member_data = class_info['memberData']
+            score_data = class_info['scoreData']
+            common_class_info = class_info['commonClassInfo']
+            class_code = class_info['classCode']
+            class_name = class_info['className']
 
-        members_df_filtered = members_df[members_df['studentId'].isin(scores_df['studentId'])]
+            create_template_excel(wb, class_code, class_name, common_class_info)
 
-        for row_num, member in enumerate(members_df_filtered.itertuples(), start=1):
-            student_scores = scores_df[scores_df['studentId'] == member.studentId]
-            if not student_scores.empty:
-                status_subject = student_scores['statusSubject'].iloc[0]
-                reason_for_failing = "Chưa Đạt" if status_subject == "Chưa Đạt" else "Trượt Điểm Danh"
-            else:
-                reason_for_failing = "Không có dữ liệu"
+            ws = wb[common_class_info['subjectCode'] + " - " + class_code]
 
-            ws.append([
-                row_num,
-                member.studentCode,
-                member.studentName,
-                f"{member.classCode} - {member.className}",
-                member.studentEmail,
-                reason_for_failing,
-                ""
-            ])
+            members_df = pd.DataFrame(member_data)
+            scores_df = pd.DataFrame(score_data)
 
-        adjust_column_width(ws)
+            if members_df.empty or scores_df.empty:
+                continue
 
-        ws.column_dimensions['A'].width = 5
+            members_df_filtered = members_df[members_df['studentId'].isin(scores_df['studentId'])]
 
-        start_row = 5
-        end_row = start_row + len(members_df_filtered) - 1
-        add_border(ws, f'A{start_row}:G{end_row}')
-        add_border(ws, 'A1:G2')
-        add_border(ws, 'A4:G4')
+            for row_num, member in enumerate(members_df_filtered.itertuples(), start=1):
+                student_scores = scores_df[scores_df['studentId'] == member.studentId]
+                if not student_scores.empty:
+                    status_subject = student_scores['statusSubject'].iloc[0]
+                    if status_subject == "0":
+                        reason_for_failing = "Thi trượt"
+                    elif status_subject == "-1":
+                        reason_for_failing = "Trượt điểm danh"
+                    elif status_subject == "-2":
+                        reason_for_failing = "Đang học"
+                    else:
+                        reason_for_failing = "Khác"
+                else:
+                    reason_for_failing = "Không có dữ liệu"
 
+                ws.append([
+                    row_num,
+                    member.studentCode,
+                    member.studentName,
+                    f"{member.classCode} - {member.className}",
+                    member.studentEmail,
+                    reason_for_failing,
+                    ""
+                ])
+
+            adjust_column_width(ws)
+
+            ws.column_dimensions['A'].width = 5
+
+            start_row = 5
+            end_row = start_row + len(members_df_filtered) - 1
+            add_border(ws, f'A{start_row}:G{end_row}')
+            add_border(ws, 'A1:G2')
+            add_border(ws, 'A4:G4')
+
+        wb.remove(wb['Sheet'])
         wb.save(local_file_path)
 
         if not os.path.exists(local_file_path):

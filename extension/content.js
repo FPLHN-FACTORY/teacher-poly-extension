@@ -11,13 +11,20 @@ function injectHTML() {
   const customControlsDiv = document.createElement("div");
   customControlsDiv.style.marginTop = "10px";
   customControlsDiv.innerHTML = `
-      <label for="classToExport">Danh sách lớp hiện có</label>
-      <select multiple name="classToExport" id="classToExport" class="form-control">
-      </select>
-      <div style="margin-top: 10px;">
-          <button class="btn btn-primary btn-export-data">Xuất Dữ Liệu</button>
-          <span class="loading-indicator" style="display: none; margin-left: 10px;">Loading...</span>
+    <label for="classToExport">Danh sách lớp hiện có</label>
+    <select multiple name="classToExport" id="classToExport" class="form-control"></select>
+    <div style="margin-top: 10px;">
+      <input type="checkbox" id="exportAllClasses" name="exportAllClasses">
+      <label for="exportAllClasses">Export bao gồm cả lớp đang học</label>
+    </div>
+    <div style="display: flex; justify-content: center; align-items: center; margin-top: 10px;">
+      <div>
+        <button class="btn btn-primary btn-export-data text-truncated">Export File</button>
       </div>
+      <div style="margin-left: 10px;">
+        <button class="btn btn-primary btn-export-data text-truncated">Export Comming Soon</button>
+      </div>
+    </div>
   `;
 
   targetButton.parentNode.insertBefore(
@@ -47,31 +54,42 @@ function injectHTML() {
       const selectedClassIds = Array.from(classSelect.selectedOptions).map(
         (option) => option.value
       );
+      const exportAllClasses =
+        document.getElementById("exportAllClasses").checked;
+
       if (selectedClassIds.length > 0) {
         const exportButton = document.querySelector(".btn-export-data");
-        const loadingIndicator = document.querySelector(".loading-indicator");
         exportButton.disabled = true;
         exportButton.innerText = "Đang xuất dữ liệu...";
-        loadingIndicator.style.display = "inline";
 
+        const allClassData = [];
         for (const classId of selectedClassIds) {
           const classCodeAndName = classSelect.querySelector(
             `option[value="${classId}"]`
           ).innerText;
           const [classCode, className] = classCodeAndName.split(" - ");
-          await fetchClassData(classId, classCode, className);
+          const classData = await fetchClassData(
+            classId,
+            classCode,
+            className,
+            exportAllClasses
+          );
+          if (classData) {
+            allClassData.push(classData);
+          }
         }
 
+        await sendDataToServer(allClassData);
+
         exportButton.disabled = false;
-        exportButton.innerText = "Xuất Dữ Liệu";
-        loadingIndicator.style.display = "none";
+        exportButton.innerText = "Export File";
         return;
       }
       alert("Please select at least one class to export data.");
     });
 }
 
-async function fetchClassData(classId, classCode, className) {
+async function fetchClassData(classId, classCode, className, exportAllClasses) {
   const campusCode = "ph";
   const allMemberData = [];
   const allAttendanceData = [];
@@ -165,50 +183,72 @@ async function fetchClassData(classId, classCode, className) {
       });
     }
 
+    let hasAssignmentWithNullScore = false;
+
     if (scoreData && scoreData.data && scoreData.data.members) {
       scoreData.data.members.forEach((member) => {
         const studentId = member.id;
         const studentName = member.fullname;
         const grades = member.grades;
-        const scores = Object.keys(grades).map((gradeId) => ({
-          gradeName: grades[gradeId].grade_name,
-          weight: grades[gradeId].weight,
-          point: grades[gradeId].point,
-        }));
+        const scores = Object.keys(grades).map((gradeId) => {
+          const grade = grades[gradeId];
+          if (grade.grade_name.includes("Assignment") && grade.point === null) {
+            hasAssignmentWithNullScore = true;
+          }
+          return {
+            gradeName: grade.grade_name,
+            weight: grade.weight,
+            point: grade.point,
+          };
+        });
 
         if (member.status_subject !== "1") {
+          if (hasAssignmentWithNullScore) {
+            allScoreDataByStudents.push({
+              studentId,
+              studentName,
+              studentCode: member.user.user_code,
+              scores,
+              statusSubject: "-2",
+            });
+
+            return;
+          }
           allScoreDataByStudents.push({
             studentId,
             studentName,
             studentCode: member.user.user_code,
             scores,
-            statusSubject:
-              member.status_subject === "0" ? "Chưa Đạt" : "Trượt Điểm Danh",
+            statusSubject: member.status_subject,
           });
         }
       });
     }
 
-    sendDataToServer(
-      allMemberData,
-      allAttendanceData,
-      allScoreDataByStudents,
+    if (hasAssignmentWithNullScore && !exportAllClasses) {
+      const confirmExport = confirm(
+        `Lớp ${className} vẫn đang học vì có Assignment chưa có điểm. Bạn có muốn xuất dữ liệu không?`
+      );
+      if (!confirmExport) {
+        return null;
+      }
+    }
+
+    return {
+      memberData: allMemberData,
+      attendanceData: allAttendanceData,
+      scoreData: allScoreDataByStudents,
       commonClassInfo,
-      classCode
-    );
+      classCode,
+      className,
+    };
   } catch (error) {
     alert("Đã xảy ra lỗi khi lấy dữ liệu lớp học. Vui lòng thử lại sau.");
     console.error("Error fetching class data:", error);
   }
 }
 
-async function sendDataToServer(
-  allMemberData,
-  allAttendanceData,
-  allScoreData,
-  commonClassInfo,
-  classCode
-) {
+async function sendDataToServer(allClassData) {
   try {
     const response = await fetch("http://localhost:5000/api/convert", {
       method: "POST",
@@ -216,10 +256,7 @@ async function sendDataToServer(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        memberData: allMemberData,
-        attendanceData: allAttendanceData,
-        scoreData: allScoreData,
-        commonClassInfo,
+        classData: allClassData,
       }),
     });
 
@@ -231,7 +268,7 @@ async function sendDataToServer(
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Danh_sach_${classCode}.xlsx`;
+    a.download = `Danh Sách Sinh Viên Trượt Môn.xlsx`;
     a.click();
     window.URL.revokeObjectURL(url);
   } catch (error) {

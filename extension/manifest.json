@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "Teacher Poly Extension",
   "version": "1.0",
-  "permissions": ["activeTab", "storage", "https://gv.poly.edu.vn/*"],
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["https://gv.poly.edu.vn/teacher/my_class/*"],
   "background": {
     "service_worker": "background.js"
   },
