@@ -18,26 +18,35 @@ def format_excel_file(file_path):
     wb.save(file_path)
 
 
-def create_template_excel(wb, class_code, class_name, common_class_info):
-    sheet_name = common_class_info["subjectCode"] + " - " + class_code
-    ws = wb.create_sheet(title=sheet_name)
+def create_template_excel(wb, sheet_name, class_code, class_name, common_class_info):
+    if sheet_name not in wb.sheetnames:
+        ws = wb.create_sheet(title=sheet_name)
+        ws.append(["STT", "Mã sinh viên", "Họ tên sinh viên", "Lớp", "Email", "Lý do nợ môn", "Ghi chú"])
 
-    ws.merge_cells('A1:G1')
-    ws['A1'] = "DANH SÁCH SINH VIÊN NỢ MÔN"
-    ws['A1'].alignment = Alignment(horizontal="center")
-    ws['A1'].font = Font(size=16, bold=True)
+        ws.merge_cells('A1:G1')
+        ws['A1'] = "DANH SÁCH SINH VIÊN NỢ MÔN"
+        ws['A1'].alignment = Alignment(horizontal="center")
+        ws['A1'].font = Font(size=16, bold=True)
 
-    ws.merge_cells('A2:G2')
-    ws[
-        'A2'] = f'(Môn: {common_class_info["subjectCode"]} - {common_class_info["subjectName"]} - {class_code} - {class_name})'
-    ws['A2'].alignment = Alignment(horizontal="center")
-    ws['A2'].fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+        ws.merge_cells('A2:G2')
+        ws[
+            'A2'] = f'(Môn: {common_class_info["subjectCode"]} - {common_class_info["subjectName"]} - {class_code} - {class_name})'
+        ws['A2'].alignment = Alignment(horizontal="center")
+        ws['A2'].fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
 
-    headers = ["STT", "Mã sinh viên", "Họ tên sinh viên", "Lớp", "Email", "Lý do nợ môn", "Ghi chú"]
-    for col_num, header in enumerate(headers, 1):
-        cell = ws.cell(row=4, column=col_num, value=header)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="center")
+        headers = ["STT", "Mã sinh viên", "Họ tên sinh viên", "Lớp", "Email", "Lý do nợ môn", "Ghi chú"]
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=4, column=col_num, value=header)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+
+    return wb[sheet_name]
 
 
 def adjust_column_width(ws):
@@ -70,6 +79,7 @@ def do_converter():
         local_file_path = os.path.join(output_dir, 'output.xlsx')
 
         wb = Workbook()
+        wb.remove(wb.active)
 
         for class_info in data['classData']:
             member_data = class_info['memberData']
@@ -77,10 +87,9 @@ def do_converter():
             common_class_info = class_info['commonClassInfo']
             class_code = class_info['classCode']
             class_name = class_info['className']
+            sheet_name = common_class_info['subjectCode']
 
-            create_template_excel(wb, class_code, class_name, common_class_info)
-
-            ws = wb[common_class_info['subjectCode'] + " - " + class_code]
+            ws = create_template_excel(wb, sheet_name, class_code, class_name, common_class_info)
 
             members_df = pd.DataFrame(member_data)
             scores_df = pd.DataFrame(score_data)
@@ -90,7 +99,8 @@ def do_converter():
 
             members_df_filtered = members_df[members_df['studentId'].isin(scores_df['studentId'])]
 
-            for row_num, member in enumerate(members_df_filtered.itertuples(), start=1):
+            start_row = ws.max_row + 1
+            for row_num, member in enumerate(members_df_filtered.itertuples(), start=start_row - 4):
                 student_scores = scores_df[scores_df['studentId'] == member.studentId]
                 if not student_scores.empty:
                     status_subject = student_scores['statusSubject'].iloc[0]
@@ -105,7 +115,7 @@ def do_converter():
                 else:
                     reason_for_failing = "Không có dữ liệu"
 
-                ws.append([
+                row_data = [
                     row_num,
                     member.studentCode,
                     member.studentName,
@@ -113,19 +123,18 @@ def do_converter():
                     member.studentEmail,
                     reason_for_failing,
                     ""
-                ])
+                ]
 
-            adjust_column_width(ws)
+                ws.append(row_data)
 
-            ws.column_dimensions['A'].width = 5
-
-            start_row = 5
-            end_row = start_row + len(members_df_filtered) - 1
+            end_row = ws.max_row
             add_border(ws, f'A{start_row}:G{end_row}')
             add_border(ws, 'A1:G2')
             add_border(ws, 'A4:G4')
 
-        wb.remove(wb['Sheet'])
+            adjust_column_width(ws)
+            ws.column_dimensions['A'].width = 5
+
         wb.save(local_file_path)
 
         if not os.path.exists(local_file_path):
