@@ -1,3 +1,7 @@
+const SERVER_HOST = "http://localhost:5000";
+const API_EXPLAIN = SERVER_HOST + "/api/explain-templ";
+const API_CARE = SERVER_HOST + "/api/attend-templ";
+
 function injectHTML() {
   const targetButton = document.querySelector(
     ".btn.btn-primary.btn-export-file"
@@ -19,10 +23,10 @@ function injectHTML() {
     </div>
     <div style="display: flex; justify-content: center; align-items: center; margin-top: 10px;">
       <div>
-        <button class="btn btn-primary btn-export-data text-truncated">Export File</button>
+        <button class="btn btn-primary btn-export-file-gt text-truncated">Tải file giải trình</button>
       </div>
       <div style="margin-left: 10px;">
-        <button class="btn btn-primary btn-export-data text-truncated">Export Comming Soon</button>
+        <button class="btn btn-primary btn-export-file-cs text-truncated">Tải file chăm sóc sinh viên</button>
       </div>
     </div>
   `;
@@ -49,7 +53,7 @@ function injectHTML() {
   });
 
   document
-    .querySelector(".btn-export-data")
+    .querySelector(".btn-export-file-gt")
     .addEventListener("click", async () => {
       const selectedClassIds = Array.from(classSelect.selectedOptions).map(
         (option) => option.value
@@ -58,7 +62,7 @@ function injectHTML() {
         document.getElementById("exportAllClasses").checked;
 
       if (selectedClassIds.length > 0) {
-        const exportButton = document.querySelector(".btn-export-data");
+        const exportButton = document.querySelector(".btn-export-file-gt");
         exportButton.disabled = true;
         exportButton.innerText = "Đang xuất dữ liệu...";
 
@@ -79,10 +83,47 @@ function injectHTML() {
           }
         }
 
-        await sendDataToServer(allClassData);
+        await sendDataToServer(allClassData, API_EXPLAIN);
 
         exportButton.disabled = false;
-        exportButton.innerText = "Export File";
+        exportButton.innerText = "Tải file giải trình";
+        return;
+      }
+      alert("Please select at least one class to export data.");
+    });
+
+  document
+    .querySelector(".btn-export-file-cs")
+    .addEventListener("click", async () => {
+      const selectedClassIds = Array.from(classSelect.selectedOptions).map(
+        (option) => option.value
+      );
+
+      if (selectedClassIds.length > 0) {
+        const exportButton = document.querySelector(".btn-export-file-cs");
+        exportButton.disabled = true;
+        exportButton.innerText = "Đang xuất dữ liệu...";
+
+        const allAttendanceData = [];
+        for (const classId of selectedClassIds) {
+          const classCodeAndName = classSelect.querySelector(
+            `option[value="${classId}"]`
+          ).innerText;
+          const [classCode, className] = classCodeAndName.split(" - ");
+          const attendanceData = await fetchAttendanceData(
+            classId,
+            classCode,
+            className
+          );
+          if (attendanceData) {
+            allAttendanceData.push(attendanceData);
+          }
+        }
+
+        await sendAttendanceDataToServer(allAttendanceData, API_CARE);
+
+        exportButton.disabled = false;
+        exportButton.innerText = "Tải file chăm sóc sinh viên";
         return;
       }
       alert("Please select at least one class to export data.");
@@ -168,18 +209,26 @@ async function fetchClassData(classId, classCode, className, exportAllClasses) {
     ) {
       attendanceData.data.members.forEach((member) => {
         const studentId = member.id;
+        const studentDetails = allMemberData.find(
+          (student) => student.studentId === studentId
+        );
         const attendance = member.attendance;
+        let attendanceCount = 0;
         for (const session in attendance) {
           const attendanceRecord = attendanceData.data.attendances[session];
-          allAttendanceData.push({
-            classId,
-            classCode,
-            studentId,
-            session,
-            date: attendanceRecord ? attendanceRecord.day : null,
-            status: attendance[session],
-          });
+          if (attendance[session] === 1) {
+            attendanceCount++;
+          }
         }
+        allAttendanceData.push({
+          classId,
+          classCode,
+          studentId,
+          studentCode: studentDetails ? studentDetails.studentCode : null,
+          studentName: studentDetails ? studentDetails.studentName : null,
+          studentEmail: studentDetails ? studentDetails.studentEmail : null,
+          attendanceCount,
+        });
       });
     }
 
@@ -248,9 +297,99 @@ async function fetchClassData(classId, classCode, className, exportAllClasses) {
   }
 }
 
-async function sendDataToServer(allClassData) {
+async function fetchAttendanceData(classId, classCode, className) {
+  const campusCode = "ph";
+  const allAttendanceData = [];
+  const commonClassInfo = {};
+
   try {
-    const response = await fetch("http://localhost:5000/api/convert", {
+    const apiAttendance = `https://gv.poly.edu.vn/teacher/group/get_attendance_by_group_id/${classId}?campus_code=${campusCode}`;
+    const apiCommonClassInfo = `https://gv.poly.edu.vn/teacher/group/get_by_id/${classId}?campus_code=${campusCode}`;
+    const apiScore = `https://gv.poly.edu.vn/teacher/group/get_grade_by_group_id/${classId}?campus_code=${campusCode}`;
+
+    const [attendanceResponse, commonClassInfoResponse, scoreResponse] =
+      await Promise.all([
+        fetch(apiAttendance),
+        fetch(apiCommonClassInfo),
+        fetch(apiScore),
+      ]);
+
+    if (
+      attendanceResponse.status === 403 ||
+      commonClassInfoResponse.status === 403 ||
+      scoreResponse.status === 403
+    ) {
+      window.location.reload();
+      return;
+    }
+
+    const [attendanceData, commonClassData, scoreData] = await Promise.all([
+      attendanceResponse.json(),
+      commonClassInfoResponse.json(),
+      scoreResponse.json(),
+    ]);
+
+    if (commonClassData && commonClassData.data) {
+      commonClassInfo.className = commonClassData.data.group_name;
+      commonClassInfo.subjectCode = commonClassData.data.psubject_code;
+      commonClassInfo.skillCode = commonClassData.data.skill_code;
+      commonClassInfo.subjectName = commonClassData.data.psubject_name;
+    }
+
+    if (
+      attendanceData &&
+      attendanceData.data &&
+      attendanceData.data.members &&
+      attendanceData.data.attendances &&
+      scoreData &&
+      scoreData.data &&
+      scoreData.data.members
+    ) {
+      attendanceData.data.members.forEach((member) => {
+        const studentId = member.id;
+        const attendance = member.attendance;
+        let attendanceCount = 0;
+        for (const session in attendance) {
+          if (attendance[session] === 1) {
+            attendanceCount++;
+          }
+        }
+
+        const statusSubject = scoreData.data.members.find(
+          (student) => student.id === studentId
+        ).status_subject;
+
+        if (statusSubject !== "1") {
+          allAttendanceData.push({
+            class_id: classId,
+            class_code: classCode,
+            student_id: studentId,
+            student_code: member.user.user_code,
+            student_name: member.fullname,
+            student_email: member.user.user_email,
+            attendance_count: attendanceCount,
+            status: statusSubject,
+            total_session: member.total_session,
+          });
+        }
+      });
+    }
+
+    return {
+      attendanceData: allAttendanceData,
+      commonClassInfo,
+      classCode,
+      className,
+    };
+  } catch (error) {
+    alert("Đã xảy ra lỗi khi lấy dữ liệu lớp học. Vui lòng thử lại sau.");
+    console.error("Error fetching attendance data:", error);
+  }
+}
+
+async function sendDataToServer(allClassData, apiUrl) {
+  try {
+    const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -272,7 +411,37 @@ async function sendDataToServer(allClassData) {
     a.click();
     window.URL.revokeObjectURL(url);
   } catch (error) {
+    alert("Đã xảy ra lỗi khi xuất dữ liệu. Vui lòng thử lại sau.");
     console.error("Error exporting data:", error);
+  }
+}
+
+async function sendAttendanceDataToServer(allAttendanceData, apiUrl) {
+  try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        attendanceData: allAttendanceData,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Danh Sách Sinh Viên Chăm Sóc.xlsx`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  } catch (error) {
+    alert("Đã xảy ra lỗi khi gửi dữ liệu. Vui lòng thử lại sau.");
+    console.error("Error sending attendance data:", error);
   }
 }
 

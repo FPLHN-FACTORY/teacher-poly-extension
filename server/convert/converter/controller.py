@@ -1,12 +1,18 @@
 from flask import Blueprint
 from flask_cors import cross_origin
 
-from convert.converter.service import do_converter
+from convert.converter.service import get_explain_file, get_care_file
 
 converter = Blueprint('converter', __name__)
 
 
-@converter.route('/api/convert', methods=['POST'])
+@converter.route('/api/explain-templ', methods=['POST'])
 @cross_origin('*')
-def convert_request():
-    return do_converter()
+def get_explain_file_request():
+    return get_explain_file()
+
+
+@converter.route('/api/attend-templ', methods=['POST'])
+@cross_origin('*')
+def get_attend_file_request():
+    return get_care_file()
